@@ -41,13 +41,13 @@ namespace AdminService.Controllers
             return Created($"{Request.Path}/", apiResponse);
         }
 
-        [HttpGet("{id}/products")]
-        public async Task<ActionResult> GetPriceListItems([FromRoute] Guid id)
+        [HttpPost("{id}/pricelistitems/query")]
+        public async Task<ActionResult> GetPriceListItems([FromRoute] Guid id, PriceListItemQueryRequest priceListItemQueryRequest)
         {
             if (!ModelState.IsValid)
                 return BadRequest(ModelState);
-            var products = await _adminService.GetProductsByPriceListId(id);
-            var apiResponse = new ApiResponse<List<Product>>(products, "200");
+            var products = await _adminService.GetPriceListItemByPriceListId(id, priceListItemQueryRequest);
+            var apiResponse = new ApiResponse<IEnumerable<PriceListItemData>>(products, "200");
             return Ok(apiResponse);
         }
     }

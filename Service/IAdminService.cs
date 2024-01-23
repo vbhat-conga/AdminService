@@ -10,6 +10,6 @@ namespace AdminService.Service
         Task<IEnumerable<Product>> GetProducts(IEnumerable<string> productIds);
         Task<IEnumerable<Guid>> SavePricelist(IEnumerable<PriceList> priceLists);
         Task<IEnumerable<Guid>> SavePricelistItem(Guid priceListId, IEnumerable<PriceListItem> productIds);
-        Task<List<Product>> GetProductsByPriceListId(Guid priceListId);
+        Task<IEnumerable<PriceListItemData>> GetPriceListItemByPriceListId(Guid priceListId, PriceListItemQueryRequest priceListItemQueryRequest);
     }
 }
