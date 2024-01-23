@@ -56,6 +56,7 @@ namespace AdminService.Service
                     batchStringtask.Add(stringBatch.StringSetAsync($"s-cpq-{x.ProductId}", result));
                     HashEntry[] productHashEntry =
                     {
+                        new HashEntry(nameof(x.ProductId), x.ProductId.ToString()),
                         new HashEntry(nameof(x.ConfigurationType), (int)x.ConfigurationType),
                         new HashEntry(nameof(x.HasAttributes), x.HasAttributes),
                         new HashEntry(nameof(x.HasDefaults), x.HasDefaults),
@@ -129,24 +130,28 @@ namespace AdminService.Service
         public async Task<IEnumerable<Product>> GetProducts(IEnumerable<string> productIds)
         {
             var batch = _database.CreateBatch();
-            var batchtask = new List<Task<RedisValue>>();
+            var batchtask = new List<Task<HashEntry[]>>();
             foreach (var productId in productIds)
             {
-                batchtask.Add(batch.StringGetAsync($"s-cpq-{productId}"));
+                batchtask.Add(batch.HashGetAllAsync($"h-cpq-{productId}"));
             }
             batch.Execute();
             var hashEntries = await Task.WhenAll(batchtask);
-            var products=new List<Product>();
-            //var products = hashEntries.Select(RedisExtension.ConvertFromRedis<Product>);
-            foreach (var entry in hashEntries)
+            //var products=new List<Product>();
+            if (hashEntries.Any())
             {
-                if (!entry.IsNull)
-                {
-                    products.Add(JsonSerializer.Deserialize<Product>(entry));
-                }
-
+                var products = hashEntries.Select(RedisExtension.ConvertFromRedis<Product>);
+                return products;
             }
-            return products;
+            //foreach (var entry in hashEntries)
+            //{
+            //    if (!entry.IsNull)
+            //    {
+            //        products.Add(JsonSerializer.Deserialize<Product>(entry));
+            //    }
+
+            //}
+            return Enumerable.Empty<Product>();
         }
 
         public async Task<IEnumerable<Guid>> SavePricelistItem(Guid priceListId, IEnumerable<PriceListItem> priceListItems)
@@ -182,7 +187,7 @@ namespace AdminService.Service
                     var hashEntry = RedisExtension.ToHashEntries(x);
                     batchtask.Add(hashBatch.HashSetAsync($"h-cpq-{x.PriceListItemId}", hashEntry));
                     batchtask2.Add(setBatch.SetAddAsync($"se-cpq-{x.ProductId}", x.PriceListItemId.ToString()));
-                    batchtask3.Add(setBatch.SetAddAsync($"se-cpq-{priceListId}", x.ProductId.ToString()));
+                    batchtask3.Add(setBatch.SetAddAsync($"se-cpq-{priceListId}", x.PriceListItemId.ToString()));
                 });
                 hashBatch.Execute();
                 setBatch.Execute();
@@ -194,63 +199,32 @@ namespace AdminService.Service
             return priceListItemDatas.Select(x => x.PriceListItemId);
         }
 
-        public async Task<List<Product>> GetProductsByPriceListId(Guid priceListId)
+        public async Task<IEnumerable<PriceListItemData>> GetPriceListItemByPriceListId(Guid priceListId, PriceListItemQueryRequest priceListItemQueryRequest)
         {
             var productList = new List<Product>();
-            var items = await _database.StringGetAsync($"s-cpq-{priceListId}-items");
-            var products = JsonSerializer.Deserialize<List<PriceListItemData>>(items!);
-            foreach (var item in products!)
+            var batch = _database.CreateBatch();
+            var hashTask=new List<Task<HashEntry[]>>();
+            priceListItemQueryRequest.Ids.ToList().ForEach(id =>
             {
-                var product = await _database.StringGetAsync($"s-cpq-{item.ProductId}");
-                var productData = JsonSerializer.Deserialize<Product>(product!);
-                productList.Add(productData!);
-            }
-          
-            return productList;
-            //var batch = _database.CreateBatch();
-            //var stringBatch1 = _database.CreateBatch();
-            //var stringBatch2 = _database.CreateBatch();
-            //var batchtask = new List<Task<HashEntry[]>>();
-            //foreach (var item in priceListItemIds)
-            //{
-            //    batchtask.Add(batch.HashGetAllAsync($"h-cpq-{item}"));
-            //}
-            //batch.Execute();
-            //var result = await Task.WhenAll(batchtask);
-            //var batchPriceListTask= new List<Task<RedisValue>>();
-            //var batchProducTask = new List<Task<RedisValue>>();
-            //foreach (var entry in result)
-            //{
-            //    var cachePriceListId = (string)entry[1].Value;
-            //    batchPriceListTask.Add(stringBatch1.StringGetAsync(cachePriceListId));
-            //    var cacheProductId = (string)entry[2].Value;
-            //    batchProducTask.Add(stringBatch2.StringGetAsync(cacheProductId));
-            //}
-            //stringBatch1.Execute();
-            //stringBatch2.Execute();
-            //var priceListData = await Task.WhenAll(batchPriceListTask);
-            //var productData = await Task.WhenAll(batchProducTask);
-            //var products = new List<Product>();
-            //var priceLists = new List<PriceList>();
-            //var priceListItems = new List<PriceListItem>();
-            //foreach (var product in productData)
-            //{
-            //    if (!product.IsNull)
-            //    {
-            //        products.Add(JsonSerializer.Deserialize<Product>(product));
-            //    }
+                hashTask.Add(batch.HashGetAllAsync($"h-cpq-{id}"));
+            });
+            batch.Execute();
+            var hashEntry = await Task.WhenAll(hashTask);
+            var result = hashEntry.Select(RedisExtension.ConvertFromRedis<PriceListItemData>);
+            if (result != null && result.Any())
+                return result.Where(x=>x.PriceListId == priceListId);
 
+            //var items = await _database.StringGetAsync($"s-cpq-{priceListId}-items");
+            //var products = JsonSerializer.Deserialize<List<PriceListItemData>>(items!);
+            //foreach (var item in products!)
+            //{
+            //    var product = await _database.StringGetAsync($"s-cpq-{item.ProductId}");
+            //    var productData = JsonSerializer.Deserialize<Product>(product!);
+            //    productList.Add(productData!);
             //}
 
-            //foreach (var pricelist in priceListData)
-            //{
-            //    if (!pricelist.IsNull)
-            //    {
-            //        priceLists.Add(JsonSerializer.Deserialize<PriceList>(pricelist));
-            //    }
-
-            //}
-            //return priceListItems;
+            //return productList;
+            return Enumerable.Empty<PriceListItemData>();
         }
     }
 }

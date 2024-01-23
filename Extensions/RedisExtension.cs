@@ -34,6 +34,12 @@ namespace CartServicePOC.Extensions
                 {
                     HashEntry entry = hashEntries.FirstOrDefault(g => g.Name.ToString().Equals(property.Name));
                     if (entry.Equals(new HashEntry())) continue;
+                    if (Nullable.GetUnderlyingType(property.PropertyType) != null)
+                    {
+                        HandleNullableTypes(property, entry, obj);
+                        continue;
+                    }
+                   
                     switch (property.PropertyType)
                     {
                         case Type guidType when guidType == typeof(Guid):
@@ -41,6 +47,9 @@ namespace CartServicePOC.Extensions
                             break;
                         case Type dobleType when dobleType == typeof(double):
                             property.SetValue(obj, Convert.ChangeType(entry.Value.ToString(), property.PropertyType));
+                            break;
+                        case Type boolType when boolType == typeof(bool):
+                            property.SetValue(obj, Convert.ChangeType(entry.Value, property.PropertyType));
                             break;
                         case Type stringType when stringType == typeof(string):
                             property.SetValue(obj, Convert.ChangeType(entry.Value.ToString(), property.PropertyType));
@@ -74,6 +83,14 @@ namespace CartServicePOC.Extensions
             {
                 return default(T);
             }
+        }
+
+        private static void HandleNullableTypes(PropertyInfo property, HashEntry entry, object entity)
+        {
+            Type t = Nullable.GetUnderlyingType(property.PropertyType);
+            object safeValue = entry.Value.IsNull ? null : Convert.ChangeType(entry.Value, t);
+
+            property.SetValue(entity, safeValue, null);
         }
     }
 
