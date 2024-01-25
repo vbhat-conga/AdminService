@@ -49,7 +49,15 @@ namespace CartServicePOC.Extensions
                             property.SetValue(obj, Convert.ChangeType(entry.Value.ToString(), property.PropertyType));
                             break;
                         case Type boolType when boolType == typeof(bool):
-                            property.SetValue(obj, Convert.ChangeType(entry.Value, property.PropertyType));
+                            if(bool.TryParse(entry.Value.ToString(), out bool result))
+                            {
+                                property.SetValue(obj, result);
+                            }
+                            else
+                            {
+                                property.SetValue(obj, Convert.ChangeType(entry.Value, property.PropertyType));
+                            }
+                            
                             break;
                         case Type stringType when stringType == typeof(string):
                             property.SetValue(obj, Convert.ChangeType(entry.Value.ToString(), property.PropertyType));
