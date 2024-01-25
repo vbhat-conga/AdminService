@@ -2,8 +2,9 @@
 using AdminService.Model;
 using AdminService.Repository;
 using CartServicePOC.Extensions;
-using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Hosting;
 using StackExchange.Redis;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace AdminService.Service
@@ -12,16 +13,26 @@ namespace AdminService.Service
     {
         private readonly IAdminRepository _adminRepository;
         private readonly IDatabase _database;
-        public AdminService(IAdminRepository adminRepository)
+        private readonly IConnectionMultiplexer _connectionMultiplexer;
+        private readonly ActivitySource _activitySource = new(Instrumentation.ActivitySourceName);
+        public AdminService(IAdminRepository adminRepository, IConnectionMultiplexer connectionMultiplexer)
         {
+            //var redis = ConnectionMultiplexer.Connect("localhost:6379");
+            //_database = redis.GetDatabase();
             _adminRepository = adminRepository;
-            var redis = ConnectionMultiplexer.Connect("localhost:6379");
-            _database = redis.GetDatabase();
+            _connectionMultiplexer = connectionMultiplexer;
+            _database = _connectionMultiplexer.GetDatabase();
         }
 
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="products"></param>
+        /// <returns></returns>
 
         public async Task<IEnumerable<Guid>> SaveProducts(IEnumerable<Product> products)
         {
+            //TODO: Not all of the property is present here what we have in CPQ but most of it is present.
             var productDatas = new List<ProductData>();
             foreach (var product in products)
             {
@@ -46,12 +57,18 @@ namespace AdminService.Service
             }
             if (await _adminRepository.SaveProducts(productDatas))
             {
+                //TODO: This is not final implemenation and lot of things need to be thought
+                //even before making this choice. But for now i am going with this.
                 var stringBatch = _database.CreateBatch();
                 var hashBatch = _database.CreateBatch();
                 var batchtask = new List<Task>();
                 var batchStringtask = new List<Task<bool>>();
                 productDatas.ForEach(x =>
                 {
+                    //TODO: where should we save in cache redis string or hash?
+                    //if its just cache may be we can save in string or if we are using redis 
+                    //as data store, then we can think of hash.
+                    // And entire object is needed in cache or only few property which is getting queried?
                     var result = JsonSerializer.Serialize(x);
                     batchStringtask.Add(stringBatch.StringSetAsync($"s-cpq-{x.ProductId}", result));
                     HashEntry[] productHashEntry =
@@ -86,6 +103,7 @@ namespace AdminService.Service
 
         public async Task<IEnumerable<Guid>> SavePricelist(IEnumerable<PriceList> priceLists)
         {
+            //TODO: Not all of the property is present here what we have in CPQ but most of it is present.
             var priceListDatas = new List<PriceListData>();
             foreach (var priceList in priceLists)
             {
@@ -109,6 +127,7 @@ namespace AdminService.Service
                 var batchStringtask = new List<Task<bool>>();
                 priceListDatas.ForEach(x =>
                 {
+                    //TODO: where should we save in cache redis string or hash?
                     var result = JsonSerializer.Serialize(x);
                     batchStringtask.Add(stringBatch.StringSetAsync($"s-cpq-{x.PriceListId}", result));
                     HashEntry[] productHashEntry =
@@ -127,8 +146,21 @@ namespace AdminService.Service
             return Enumerable.Empty<Guid>();
         }
 
+        public async Task<PriceList?> GetPriceList(Guid Id)
+        {
+            //TODO This needs a change, whether to get from redis string or redis hash
+            // what happens when data is not peresnt in cache?
+            var priceListString = await _database.StringGetAsync($"s-cpq-{Id}");
+            if (priceListString.IsNullOrEmpty)
+                return null;
+
+            var priceList = JsonSerializer.Deserialize<PriceList>(priceListString!);
+            return priceList;
+        }
         public async Task<IEnumerable<Product>> GetProducts(IEnumerable<string> productIds)
         {
+            //TODO: what happens when data is not present in cache?
+            using var activity = _activitySource.StartActivity($"{nameof(AdminService)} : GetProducts", ActivityKind.Server);
             var batch = _database.CreateBatch();
             var batchtask = new List<Task<HashEntry[]>>();
             foreach (var productId in productIds)
@@ -137,25 +169,18 @@ namespace AdminService.Service
             }
             batch.Execute();
             var hashEntries = await Task.WhenAll(batchtask);
-            //var products=new List<Product>();
             if (hashEntries.Any())
             {
                 var products = hashEntries.Select(RedisExtension.ConvertFromRedis<Product>);
                 return products;
             }
-            //foreach (var entry in hashEntries)
-            //{
-            //    if (!entry.IsNull)
-            //    {
-            //        products.Add(JsonSerializer.Deserialize<Product>(entry));
-            //    }
-
-            //}
             return Enumerable.Empty<Product>();
         }
 
         public async Task<IEnumerable<Guid>> SavePricelistItem(Guid priceListId, IEnumerable<PriceListItem> priceListItems)
         {
+            //TODO: Not all of the property is present here what we have in CPQ.
+            //May be 50% since lot of them are nullable.
             var priceListItemDatas = new List<PriceListItemData>();
             foreach (var item in priceListItems)
             {
@@ -176,6 +201,7 @@ namespace AdminService.Service
             }
             if (await _adminRepository.SavePricelistItem(priceListItemDatas))
             {
+                //TODO: Need to re think on what redis data structure to use. Cache stratergy?
                 var setBatch = _database.CreateBatch();
                 var batchtask = new List<Task>();
                 var setBatch2 = _database.CreateBatch();
@@ -201,29 +227,34 @@ namespace AdminService.Service
 
         public async Task<IEnumerable<PriceListItemData>> GetPriceListItemByPriceListId(Guid priceListId, PriceListItemQueryRequest priceListItemQueryRequest)
         {
+            //TODO: when no data in cache?
             var productList = new List<Product>();
             var batch = _database.CreateBatch();
             var hashTask=new List<Task<HashEntry[]>>();
+            var batch1 = _database.CreateBatch();
+            var setTask = new List<Task<RedisValue[]>>();
             priceListItemQueryRequest.Ids.ToList().ForEach(id =>
             {
-                hashTask.Add(batch.HashGetAllAsync($"h-cpq-{id}"));
+                setTask.Add(batch1.SetMembersAsync($"se-cpq-{id}"));
+               
             });
+            batch1.Execute();
+            while (setTask.Any())
+            {
+                var completedTask = await Task.WhenAny(setTask);
+                setTask.Remove(completedTask);
+                var priceItems = await completedTask;
+                foreach (var entry in priceItems)
+                {
+                    hashTask.Add(batch.HashGetAllAsync($"h-cpq-{entry}"));
+                }
+            }
             batch.Execute();
             var hashEntry = await Task.WhenAll(hashTask);
             var result = hashEntry.Select(RedisExtension.ConvertFromRedis<PriceListItemData>);
             if (result != null && result.Any())
                 return result.Where(x=>x.PriceListId == priceListId);
 
-            //var items = await _database.StringGetAsync($"s-cpq-{priceListId}-items");
-            //var products = JsonSerializer.Deserialize<List<PriceListItemData>>(items!);
-            //foreach (var item in products!)
-            //{
-            //    var product = await _database.StringGetAsync($"s-cpq-{item.ProductId}");
-            //    var productData = JsonSerializer.Deserialize<Product>(product!);
-            //    productList.Add(productData!);
-            //}
-
-            //return productList;
             return Enumerable.Empty<PriceListItemData>();
         }
     }
